@@ -135,9 +135,26 @@ jobs:
 
       - name: Report tunnel URL
         run: |
-          echo "Tunnel is live at: ${{ steps.tunnel.outputs.tunnel_url }}"
+          TUNNEL_URL="${{ steps.tunnel.outputs.tunnel_url }}"
+          echo "Tunnel is live at: $TUNNEL_URL"
           echo "User ID: ${{ github.event.inputs.user_id }}"
           echo "Session ID: ${{ github.event.inputs.session_id }}"
+          echo "## Lab Environment Ready! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tunnel URL:** $TUNNEL_URL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**User ID:** ${{ github.event.inputs.user_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Session ID:** ${{ github.event.inputs.session_id }}" >> $GITHUB_STEP_SUMMARY
+          
+          echo "TUNNEL_URL=$TUNNEL_URL" >> tunnel_url.txt
+          cat tunnel_url.txt
+      
+      - name: Upload tunnel URL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunnel-url-${{ github.event.inputs.session_id }}
+          path: tunnel_url.txt
+          retention-days: 1
 
       - name: Keep lab running
         run: |
