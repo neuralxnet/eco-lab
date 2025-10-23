@@ -1,0 +1,118 @@
+name: Deploy Ephemeral Lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: 'User ID requesting the lab'
+        required: true
+        type: string
+      session_id:
+        description: 'Session ID for tracking'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Flask
+        run: |
+          pip install flask
+
+      - name: Create Flask test app
+        run: |
+          cat > app.py << 'EOF'
+          from flask import Flask, jsonify
+          import os
+          import datetime
+
+          app = Flask(__name__)
+
+          @app.route('/')
+          def home():
+              return jsonify({
+                  'status': 'running',
+                  'user_id': os.getenv('USER_ID', 'unknown'),
+                  'session_id': os.getenv('SESSION_ID', 'unknown'),
+                  'started_at': os.getenv('STARTED_AT', 'unknown'),
+                  'message': 'Ephemeral Lab Environment'
+              })
+
+          @app.route('/health')
+          def health():
+              return jsonify({'status': 'healthy'})
+
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=5000)
+          EOF
+
+      - name: Download and setup Cloudflare Tunnel
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
+
+      - name: Start Flask app in background
+        env:
+          USER_ID: ${{ github.event.inputs.user_id }}
+          SESSION_ID: ${{ github.event.inputs.session_id }}
+          STARTED_AT: ${{ github.event.repository.updated_at }}
+        run: |
+          python app.py &
+          echo $! > flask.pid
+          sleep 5
+
+      - name: Start Cloudflare Tunnel and capture URL
+        id: tunnel
+        run: |
+          cloudflared tunnel --url http://localhost:5000 --no-autoupdate > tunnel.log 2>&1 &
+          echo $! > tunnel.pid
+          
+          echo "Waiting for tunnel URL..."
+          for i in {1..30}; do
+            if grep -q "https://" tunnel.log; then
+              TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' tunnel.log | head -1)
+              echo "tunnel_url=$TUNNEL_URL" >> $GITHUB_OUTPUT
+              echo "Tunnel URL: $TUNNEL_URL"
+              break
+            fi
+            sleep 2
+          done
+          
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "Failed to get tunnel URL"
+            cat tunnel.log
+            exit 1
+          fi
+
+      - name: Report tunnel URL
+        run: |
+          echo "Tunnel is live at: ${{ steps.tunnel.outputs.tunnel_url }}"
+          echo "User ID: ${{ github.event.inputs.user_id }}"
+          echo "Session ID: ${{ github.event.inputs.session_id }}"
+
+      - name: Keep lab running
+        run: |
+          echo "Lab will run for 30 minutes or until cancelled"
+          sleep 1800
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f tunnel.pid ]; then
+            kill $(cat tunnel.pid) || true
+          fi
+          if [ -f flask.pid ]; then
+            kill $(cat flask.pid) || true
+          fi
+          echo "Lab session ended"
